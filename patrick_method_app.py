@@ -1,8 +1,11 @@
 import streamlit as st
+from collections import defaultdict
 
+# 十進位轉固定長度二進位
 def decimal_to_binary(n, width):
     return format(n, f'0{width}b')
 
+# 合併只差一位的 term
 def combine_terms(term1, term2):
     diff = 0
     combined = ""
@@ -14,7 +17,8 @@ def combine_terms(term1, term2):
             combined += a
     return combined if diff == 1 else None
 
-def simplify(minterms, num_vars):
+# 產生所有 Prime Implicants（含重複）
+def generate_prime_implicants(minterms, num_vars):
     minterms = list(set(minterms))
     terms = [decimal_to_binary(m, num_vars) for m in minterms]
     unchecked = terms[:]
@@ -37,6 +41,7 @@ def simplify(minterms, num_vars):
     
     return prime_implicants
 
+# 轉成 A'B 型式
 def term_to_expression(term, var_names):
     expression = ""
     for i, val in enumerate(term):
@@ -46,29 +51,70 @@ def term_to_expression(term, var_names):
             expression += var_names[i] + "'"
     return expression
 
-st.title("Patrick Method - Minimum SOP 簡化器")
+# 某 term 是否能覆蓋一個 minterm
+def term_covers_minterm(term, minterm):
+    for t_bit, m_bit in zip(term, minterm):
+        if t_bit != '-' and t_bit != m_bit:
+            return False
+    return True
 
-st.markdown("### 輸入參數")
-num_vars = st.number_input("請輸入變數數量（例如3代表 A, B, C）", min_value=2, max_value=8, value=3)
+# 為某函數選出覆蓋其 minterms 的最小 SOP
+def select_covering_terms(minterms, prime_implicants, num_vars):
+    minterms_bin = [decimal_to_binary(m, num_vars) for m in minterms]
+    selected = []
+    uncovered = set(minterms_bin)
+
+    for pi in prime_implicants:
+        for m in minterms_bin:
+            if m in uncovered and term_covers_minterm(pi, m):
+                selected.append(pi)
+                uncovered -= {m for m in minterms_bin if term_covers_minterm(pi, m)}
+                break
+        if not uncovered:
+            break
+
+    return selected
+
+# --- Streamlit 介面 ---
+st.title("Patrick Method - 多輸出最小 SOP 化簡器")
+
+st.markdown("### 輸入變數數量與函數")
+num_vars = st.number_input("請輸入變數數量", min_value=2, max_value=8, value=3)
 var_names = [chr(ord('A') + i) for i in range(num_vars)]
 
-minterm_input = st.text_input("請輸入 minterms（用逗號分隔，例如：1,3,5,7）")
+st.markdown("### 輸入格式：一行一個輸出函數，例如：")
+st.code("F = 1,3,5\nG = 2,3,7")
 
-if st.button("進行化簡"):
+multi_input = st.text_area("請輸入多個輸出函數", height=150)
+
+if st.button("開始化簡"):
     try:
-        minterms = [int(x.strip()) for x in minterm_input.split(",") if x.strip().isdigit()]
-        max_val = 2 ** num_vars - 1
-        minterms = [m for m in minterms if 0 <= m <= max_val]
-        if not minterms:
-            st.error("請至少輸入一個合法的 minterm")
+        func_minterms = {}
+        all_minterms = set()
+
+        lines = multi_input.strip().split("\n")
+        for line in lines:
+            if '=' not in line: continue
+            fname, mints = line.split('=')
+            fname = fname.strip()
+            minterms = [int(x.strip()) for x in mints.split(",") if x.strip().isdigit()]
+            func_minterms[fname] = minterms
+            all_minterms.update(minterms)
+
+        if not func_minterms:
+            st.error("請正確輸入至少一個輸出函數")
         else:
-            prime_implicants = simplify(minterms, num_vars)
-            simplified = [term_to_expression(t, var_names) for t in prime_implicants]
+            # 先生成所有的 Prime Implicants（包含 shared）
+            all_prime_implicants = generate_prime_implicants(list(all_minterms), num_vars)
 
-            st.markdown("### 最小化 SOP 結果")
-            st.write(" + ".join(simplified))
+            st.markdown("### 各輸出函數的最小 SOP")
+            for fname, minterms in func_minterms.items():
+                selected_terms = select_covering_terms(minterms, all_prime_implicants, num_vars)
+                expression = " + ".join([term_to_expression(t, var_names) for t in selected_terms])
+                st.write(f"**{fname}(最小 SOP):** {expression}")
 
-            st.markdown("### Prime Implicants（中間步驟）")
-            st.write(prime_implicants)
+            st.markdown("### 所有 Prime Implicants（含 shared）")
+            st.write(all_prime_implicants)
+
     except Exception as e:
         st.error(f"發生錯誤：{e}")
